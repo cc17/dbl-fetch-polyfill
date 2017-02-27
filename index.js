@@ -1,352 +1,418 @@
-'use strict';
-var returnObj = {};
-function normalizeName(name) {
-  if (typeof name !== 'string') {
-   name = name.toString();
+(function() {
+  'use strict';
+
+  // if __disableNativeFetch is set to true, the it will always polyfill fetch
+  // with Ajax.
+  if (!self.__disableNativeFetch && self.fetch) {
+    return
   }
-  if (/[^a-z0-9\-#$%&'*+.\^_`|~]/i.test(name)) {
-   throw new TypeError('Invalid character in header field name')
+
+  function normalizeName(name) {
+    if (typeof name !== 'string') {
+      name = String(name)
+    }
+    if (/[^a-z0-9\-#$%&'*+.\^_`|~]/i.test(name)) {
+      throw new TypeError('Invalid character in header field name')
+    }
+    return name.toLowerCase()
   }
-  return name.toLowerCase()
-}
 
-function normalizeValue(value) {
- if (typeof value !== 'string') {
-   value = value.toString();
- }
- return value
-}
+  function normalizeValue(value) {
+    if (typeof value !== 'string') {
+      value = String(value)
+    }
+    return value
+  }
 
-function Headers(headers) {
- this.map = {}
+  function Headers(headers) {
+    this.map = {}
 
- var self = this
- if (headers instanceof Headers) {
-   headers.forEach(function(name, values) {
-     values.forEach(function(value) {
-       self.append(name, value)
-     })
-   })
+    if (headers instanceof Headers) {
+      headers.forEach(function(value, name) {
+        this.append(name, value)
+      }, this)
 
- } else if (headers) {
-   Object.getOwnPropertyNames(headers).forEach(function(name) {
-     self.append(name, headers[name])
-   })
- }
-}
+    } else if (headers) {
+      Object.getOwnPropertyNames(headers).forEach(function(name) {
+        this.append(name, headers[name])
+      }, this)
+    }
+  }
 
-Headers.prototype.append = function(name, value) {
- name = normalizeName(name)
- value = normalizeValue(value)
- var list = this.map[name]
- if (!list) {
-   list = []
-   this.map[name] = list
- }
- list.push(value)
-}
+  Headers.prototype.append = function(name, value) {
+    name = normalizeName(name)
+    value = normalizeValue(value)
+    var list = this.map[name]
+    if (!list) {
+      list = []
+      this.map[name] = list
+    }
+    list.push(value)
+  }
 
-Headers.prototype['delete'] = function(name) {
- delete this.map[normalizeName(name)]
-}
+  Headers.prototype['delete'] = function(name) {
+    delete this.map[normalizeName(name)]
+  }
 
-Headers.prototype.get = function(name) {
- var values = this.map[normalizeName(name)]
- return values ? values[0] : null
-}
+  Headers.prototype.get = function(name) {
+    var values = this.map[normalizeName(name)]
+    return values ? values[0] : null
+  }
 
-Headers.prototype.getAll = function(name) {
- return this.map[normalizeName(name)] || []
-}
+  Headers.prototype.getAll = function(name) {
+    return this.map[normalizeName(name)] || []
+  }
 
-Headers.prototype.has = function(name) {
- return this.map.hasOwnProperty(normalizeName(name))
-}
+  Headers.prototype.has = function(name) {
+    return this.map.hasOwnProperty(normalizeName(name))
+  }
 
-Headers.prototype.set = function(name, value) {
- this.map[normalizeName(name)] = [normalizeValue(value)]
-}
+  Headers.prototype.set = function(name, value) {
+    this.map[normalizeName(name)] = [normalizeValue(value)]
+  }
 
-// Instead of iterable for now.
-Headers.prototype.forEach = function(callback) {
- var self = this
- Object.getOwnPropertyNames(this.map).forEach(function(name) {
-   callback(name, self.map[name])
- })
-}
+  Headers.prototype.forEach = function(callback, thisArg) {
+    Object.getOwnPropertyNames(this.map).forEach(function(name) {
+      this.map[name].forEach(function(value) {
+        callback.call(thisArg, value, name, this)
+      }, this)
+    }, this)
+  }
 
-function consumed(body) {
- if (body.bodyUsed) {
-   return fetch.Promise.reject(new TypeError('Already read'))
- }
- body.bodyUsed = true
-}
+  function consumed(body) {
+    if (body.bodyUsed) {
+      return Promise.reject(new TypeError('Already read'))
+    }
+    body.bodyUsed = true
+  }
 
-function fileReaderReady(reader) {
- return new fetch.Promise(function(resolve, reject) {
-   reader.onload = function() {
-     resolve(reader.result)
-   }
-   reader.onerror = function() {
-     reject(reader.error)
-   }
- })
-}
+  function fileReaderReady(reader) {
+    return new Promise(function(resolve, reject) {
+      reader.onload = function() {
+        resolve(reader.result)
+      }
+      reader.onerror = function() {
+        reject(reader.error)
+      }
+    })
+  }
 
-function readBlobAsArrayBuffer(blob) {
- var reader = new FileReader()
- reader.readAsArrayBuffer(blob)
- return fileReaderReady(reader)
-}
+  function readBlobAsArrayBuffer(blob) {
+    var reader = new FileReader()
+    reader.readAsArrayBuffer(blob)
+    return fileReaderReady(reader)
+  }
 
-function readBlobAsText(blob) {
- var reader = new FileReader()
- reader.readAsText(blob)
- return fileReaderReady(reader)
-}
+  function readBlobAsText(blob, options) {
+    var reader = new FileReader()
+    var contentType = options.headers.map['content-type'] ? options.headers.map['content-type'].toString() : ''
+    var regex = /charset\=[0-9a-zA-Z\-\_]*;?/
+    var _charset = blob.type.match(regex) || contentType.match(regex)
+    var args = [blob]
 
-var support = {
- blob: 'FileReader' in self && 'Blob' in self && (function() {
-   try {
-     new Blob();
-     return true
-   } catch(e) {
-     return false
-   }
- })(),
- formData: 'FormData' in self
-}
+    if(_charset) {
+      args.push(_charset[0].replace(/^charset\=/, '').replace(/;$/, ''))
+    }
 
-function Body() {
- this.bodyUsed = false
+    reader.readAsText.apply(reader, args)
+    return fileReaderReady(reader)
+  }
+
+  var support = {
+    blob: 'FileReader' in self && 'Blob' in self && (function() {
+      try {
+        new Blob();
+        return true
+      } catch(e) {
+        return false
+      }
+    })(),
+    formData: 'FormData' in self,
+    arrayBuffer: 'ArrayBuffer' in self
+  }
+
+  function Body() {
+    this.bodyUsed = false
 
 
- this._initBody = function(body) {
-   this._bodyInit = body
-   if (typeof body === 'string') {
-     this._bodyText = body
-   } else if (support.blob && Blob.prototype.isPrototypeOf(body)) {
-     this._bodyBlob = body
-   } else if (support.formData && FormData.prototype.isPrototypeOf(body)) {
-     this._bodyFormData = body
-   } else if (!body) {
-     this._bodyText = ''
-   } else {
-     throw new Error('unsupported BodyInit type')
-   }
- }
+    this._initBody = function(body, options) {
+      this._bodyInit = body
+      if (typeof body === 'string') {
+        this._bodyText = body
+      } else if (support.blob && Blob.prototype.isPrototypeOf(body)) {
+        this._bodyBlob = body
+        this._options = options
+      } else if (support.formData && FormData.prototype.isPrototypeOf(body)) {
+        this._bodyFormData = body
+      } else if (!body) {
+        this._bodyText = ''
+      } else if (support.arrayBuffer && ArrayBuffer.prototype.isPrototypeOf(body)) {
+        // Only support ArrayBuffers for POST method.
+        // Receiving ArrayBuffers happens via Blobs, instead.
+      } else {
+        throw new Error('unsupported BodyInit type')
+      }
+    }
 
- if (support.blob) {
-   this.blob = function() {
-     var rejected = consumed(this)
-     if (rejected) {
-       return rejected
-     }
+    if (support.blob) {
+      this.blob = function() {
+        var rejected = consumed(this)
+        if (rejected) {
+          return rejected
+        }
 
-     if (this._bodyBlob) {
-       return fetch.Promise.resolve(this._bodyBlob)
-     } else if (this._bodyFormData) {
-       throw new Error('could not read FormData body as blob')
-     } else {
-       return fetch.Promise.resolve(new Blob([this._bodyText]))
-     }
-   }
+        if (this._bodyBlob) {
+          return Promise.resolve(this._bodyBlob)
+        } else if (this._bodyFormData) {
+          throw new Error('could not read FormData body as blob')
+        } else {
+          return Promise.resolve(new Blob([this._bodyText]))
+        }
+      }
 
-   this.arrayBuffer = function() {
-     return this.blob().then(readBlobAsArrayBuffer)
-   }
+      this.arrayBuffer = function() {
+        return this.blob().then(readBlobAsArrayBuffer)
+      }
 
-   this.text = function() {
-     var rejected = consumed(this)
-     if (rejected) {
-       return rejected
-     }
+      this.text = function() {
+        var rejected = consumed(this)
+        if (rejected) {
+          return rejected
+        }
 
-     if (this._bodyBlob) {
-       return readBlobAsText(this._bodyBlob)
-     } else if (this._bodyFormData) {
-       throw new Error('could not read FormData body as text')
-     } else {
-       return fetch.Promise.resolve(this._bodyText)
-     }
-   }
- } else {
-   this.text = function() {
-     var rejected = consumed(this)
-     return rejected ? rejected : fetch.Promise.resolve(this._bodyText)
-   }
- }
+        if (this._bodyBlob) {
+          return readBlobAsText(this._bodyBlob, this._options)
+        } else if (this._bodyFormData) {
+          throw new Error('could not read FormData body as text')
+        } else {
+          return Promise.resolve(this._bodyText)
+        }
+      }
+    } else {
+      this.text = function() {
+        var rejected = consumed(this)
+        return rejected ? rejected : Promise.resolve(this._bodyText)
+      }
+    }
 
- if (support.formData) {
-   this.formData = function() {
-     return this.text().then(decode)
-   }
- }
+    if (support.formData) {
+      this.formData = function() {
+        return this.text().then(decode)
+      }
+    }
 
- this.json = function() {
-   return this.text().then(function (text) {
-       return JSON.parse(text);
-   });
- }
+    this.json = function() {
+      return this.text().then(JSON.parse)
+    }
 
- return this
-}
+    return this
+  }
 
-// HTTP methods whose capitalization should be normalized
-var methods = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT']
+  // HTTP methods whose capitalization should be normalized
+  var methods = ['DELETE', 'GET', 'HEAD', 'OPTIONS', 'POST', 'PUT']
 
-function normalizeMethod(method) {
- var upcased = method.toUpperCase()
- return (methods.indexOf(upcased) > -1) ? upcased : method
-}
+  function normalizeMethod(method) {
+    var upcased = method.toUpperCase()
+    return (methods.indexOf(upcased) > -1) ? upcased : method
+  }
 
-function Request(url, options) {
- options = options || {}
- this.url = url
+  function Request(input, options) {
+    options = options || {}
+    var body = options.body
+    if (Request.prototype.isPrototypeOf(input)) {
+      if (input.bodyUsed) {
+        throw new TypeError('Already read')
+      }
+      this.url = input.url
+      this.credentials = input.credentials
+      if (!options.headers) {
+        this.headers = new Headers(input.headers)
+      }
+      this.method = input.method
+      this.mode = input.mode
+      if (!body) {
+        body = input._bodyInit
+        input.bodyUsed = true
+      }
+    } else {
+      this.url = input
+    }
 
- this.credentials = options.credentials || 'omit'
- this.headers = new Headers(options.headers)
- this.method = normalizeMethod(options.method || 'GET')
- this.mode = options.mode || null
- this.referrer = null
+    this.credentials = options.credentials || this.credentials || 'omit'
+    if (options.headers || !this.headers) {
+      this.headers = new Headers(options.headers)
+    }
+    this.method = normalizeMethod(options.method || this.method || 'GET')
+    this.mode = options.mode || this.mode || null
+    this.referrer = null
 
- if ((this.method === 'GET' || this.method === 'HEAD') && options.body) {
-   throw new TypeError('Body not allowed for GET or HEAD requests')
- }
- this._initBody(options.body)
-}
+    if ((this.method === 'GET' || this.method === 'HEAD') && body) {
+      throw new TypeError('Body not allowed for GET or HEAD requests')
+    }
+    this._initBody(body, options)
+  }
 
-function decode(body) {
- var form = new FormData()
- body.trim().split('&').forEach(function(bytes) {
-   if (bytes) {
-     var split = bytes.split('=')
-     var name = split.shift().replace(/\+/g, ' ')
-     var value = split.join('=').replace(/\+/g, ' ')
-     form.append(decodeURIComponent(name), decodeURIComponent(value))
-   }
- })
- return form
-}
+  Request.prototype.clone = function() {
+    return new Request(this)
+  }
 
-function headers(xhr) {
- var head = new Headers()
- var pairs = xhr.getAllResponseHeaders().trim().split('\n')
- pairs.forEach(function(header) {
-   var split = header.trim().split(':')
-   var key = split.shift().trim()
-   var value = split.join(':').trim()
-   head.append(key, value)
- })
- return head
-}
+  function decode(body) {
+    var form = new FormData()
+    body.trim().split('&').forEach(function(bytes) {
+      if (bytes) {
+        var split = bytes.split('=')
+        var name = split.shift().replace(/\+/g, ' ')
+        var value = split.join('=').replace(/\+/g, ' ')
+        form.append(decodeURIComponent(name), decodeURIComponent(value))
+      }
+    })
+    return form
+  }
 
-var noXhrPatch =
- typeof window !== 'undefined' && !!window.ActiveXObject &&
-   !(window.XMLHttpRequest && (new XMLHttpRequest).dispatchEvent);
+  function headers(xhr) {
+    var head = new Headers()
+    var pairs = xhr.getAllResponseHeaders().trim().split('\n')
+    pairs.forEach(function(header) {
+      var split = header.trim().split(':')
+      var key = split.shift().trim()
+      var value = split.join(':').trim()
+      head.append(key, value)
+    })
+    return head
+  }
 
-function getXhr() {
- // from backbone.js 1.1.2
- // https://github.com/jashkenas/backbone/blob/1.1.2/backbone.js#L1181
- if (noXhrPatch && !(/^(get|post|head|put|delete|options)$/i.test(this.method))) {
-   this.usingActiveXhr = true;
-   return new ActiveXObject("Microsoft.XMLHTTP");
- }
- return new XMLHttpRequest();
-}
+  Body.call(Request.prototype)
 
-Body.call(Request.prototype)
+  function Response(bodyInit, options) {
+    if (!options) {
+      options = {}
+    }
 
-function Response(bodyInit, options) {
- if (!options) {
-   options = {}
- }
+    this._initBody(bodyInit, options)
+    this.type = 'default'
+    this.status = options.status
+    this.ok = this.status >= 200 && this.status < 300
+    this.statusText = options.statusText
+    this.headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers)
+    this.url = options.url || ''
+  }
 
- this._initBody(bodyInit)
- this.type = 'default'
- this.url = null
- this.status = options.status
- this.ok = this.status >= 200 && this.status < 300
- this.statusText = options.statusText
- this.headers = options.headers instanceof Headers ? options.headers : new Headers(options.headers)
- this.url = options.url || ''
-}
+  Body.call(Response.prototype)
 
-Body.call(Response.prototype)
+  Response.prototype.clone = function() {
+    return new Response(this._bodyInit, {
+      status: this.status,
+      statusText: this.statusText,
+      headers: new Headers(this.headers),
+      url: this.url
+    })
+  }
 
-returnObj.Headers = Headers;
-returnObj.Request = Request;
-returnObj.Response = Response;
+  Response.error = function() {
+    var response = new Response(null, {status: 0, statusText: ''})
+    response.type = 'error'
+    return response
+  }
 
-returnObj.fetch = function(input, init) {
- // TODO: Request constructor should accept input, init
- var request
- if (Request.prototype.isPrototypeOf(input) && !init) {
-   request = input
- } else {
-   request = new Request(input, init)
- }
+  var redirectStatuses = [301, 302, 303, 307, 308]
 
- return new fetch.Promise(function(resolve, reject) {
-   var xhr = getXhr();
-   if (request.credentials === 'cors') {
-     xhr.withCredentials = true;
-   }
+  Response.redirect = function(url, status) {
+    if (redirectStatuses.indexOf(status) === -1) {
+      throw new RangeError('Invalid status code')
+    }
 
-   function responseURL() {
-     if ('responseURL' in xhr) {
-       return xhr.responseURL
-     }
+    return new Response(null, {status: status, headers: {location: url}})
+  }
 
-     // Avoid security warnings on getResponseHeader when not allowed by CORS
-     if (/^X-Request-URL:/m.test(xhr.getAllResponseHeaders())) {
-       return xhr.getResponseHeader('X-Request-URL')
-     }
+  self.Headers = Headers;
+  self.Request = Request;
+  self.Response = Response;
 
-     return;
-   }
+  self.fetch = function(input, init) {
+    return new Promise(function(resolve, reject) {
+      var request
+      if (Request.prototype.isPrototypeOf(input) && !init) {
+        request = input
+      } else {
+        request = new Request(input, init)
+      }
 
-   function onload() {
-     if (xhr.readyState !== 4) {
-       return
-     }
-     var status = (xhr.status === 1223) ? 204 : xhr.status
-     if (status < 100 || status > 599) {
-       reject(new TypeError('Network request failed'))
-       return
-     }
-     var options = {
-       status: status,
-       statusText: xhr.statusText,
-       headers: headers(xhr),
-       url: responseURL()
-     }
-     var body = 'response' in xhr ? xhr.response : xhr.responseText;
-     resolve(new Response(body, options))
-   }
-   xhr.onreadystatechange = onload;
-   if (!self.usingActiveXhr) {
-     xhr.onload = onload;
-     xhr.onerror = function() {
-       reject(new TypeError('Network request failed'))
-     }
-   }
+      var xhr = new XMLHttpRequest()
 
-   xhr.open(request.method, request.url, true)
+      function responseURL() {
+        if ('responseURL' in xhr) {
+          return xhr.responseURL
+        }
 
-   if ('responseType' in xhr && support.blob) {
-     xhr.responseType = 'blob'
-   }
+        // Avoid security warnings on getResponseHeader when not allowed by CORS
+        if (/^X-Request-URL:/m.test(xhr.getAllResponseHeaders())) {
+          return xhr.getResponseHeader('X-Request-URL')
+        }
 
-   request.headers.forEach(function(name, values) {
-     values.forEach(function(value) {
-       xhr.setRequestHeader(name, value)
-     })
-   })
+        return;
+      }
 
-   xhr.send(typeof request._bodyInit === 'undefined' ? null : request._bodyInit)
- })
-}
-fetch.Promise = self.Promise; // you could change it to your favorite alternative
-returnObj.fetch.polyfill = true
-module.exports = fetch;
+      var __onLoadHandled = false;
+
+      function onload() {
+        if (xhr.readyState !== 4) {
+          return
+        }
+        var status = (xhr.status === 1223) ? 204 : xhr.status
+        if (status < 100 || status > 599) {
+          if (__onLoadHandled) { return; } else { __onLoadHandled = true; }
+          reject(new TypeError('Network request failed'))
+          return
+        }
+        var options = {
+          status: status,
+          statusText: xhr.statusText,
+          headers: headers(xhr),
+          url: responseURL()
+        }
+        var body = 'response' in xhr ? xhr.response : xhr.responseText;
+
+        if (__onLoadHandled) { return; } else { __onLoadHandled = true; }
+        resolve(new Response(body, options))
+      }
+      xhr.onreadystatechange = onload;
+      xhr.onload = onload;
+      xhr.onerror = function() {
+        if (__onLoadHandled) { return; } else { __onLoadHandled = true; }
+        reject(new TypeError('Network request failed'))
+      }
+
+      xhr.open(request.method, request.url, true)
+
+      // `withCredentials` should be setted after calling `.open` in IE10
+      // http://stackoverflow.com/a/19667959/1219343
+      try {
+        if (request.credentials === 'include') {
+          if ('withCredentials' in xhr) {
+            xhr.withCredentials = true;
+          } else {
+            console && console.warn && console.warn('withCredentials is not supported, you can ignore this warning');
+          }
+        }
+      } catch (e) {
+        console && console.warn && console.warn('set withCredentials error:' + e);
+      }
+
+      if ('responseType' in xhr && support.blob) {
+        xhr.responseType = 'blob'
+      }
+
+      request.headers.forEach(function(value, name) {
+        xhr.setRequestHeader(name, value)
+      })
+
+      xhr.send(typeof request._bodyInit === 'undefined' ? null : request._bodyInit)
+    })
+  }
+  self.fetch.polyfill = true
+
+  // Support CommonJS
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = self.fetch;
+  }
+})();
